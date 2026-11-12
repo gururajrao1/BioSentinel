@@ -43,7 +43,7 @@ def test_stages_cover_all_edge_arches():
     from biosentinel.models import EDGE_ARCHES, build_classifier, head_prefixes
 
     for arch in EDGE_ARCHES:
-        model = build_classifier(arch, num_classes=4)
+        model = build_classifier(arch, num_classes=4, pretrained=False)
         set_stage1_head_only(model)
         stage1 = trainable_param_names(model)
         assert stage1, arch
