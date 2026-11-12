@@ -18,7 +18,7 @@ from biosentinel.models import (
 
 @pytest.mark.parametrize("arch", EDGE_ARCHES)
 def test_build_classifier_forward_shape(arch):
-    model = build_classifier(arch, num_classes=4)
+    model = build_classifier(arch, num_classes=4, pretrained=False)
     model.eval()
     with torch.no_grad():
         out = model(torch.randn(1, 3, 128, 128))

@@ -38,9 +38,15 @@ def list_images(path: str) -> list[str]:
 
 
 def load_model(arch: str, checkpoint: str, num_classes: int, device: str):
-    model = build_classifier(arch, num_classes=num_classes)
+    model = build_classifier(arch, num_classes=num_classes, pretrained=False)
     model.load_state_dict(torch.load(checkpoint, map_location=device))
     return model.to(device).eval()
+
+
+def tta_logits(model, tensor):
+    """Mean logits over the original and horizontal flip."""
+    flipped = torch.flip(tensor, dims=[3])
+    return (model(tensor) + model(flipped)) / 2
 
 
 def predict_batch(
@@ -51,6 +57,7 @@ def predict_batch(
     temperature: float = 1.0,
     threshold: float = 0.0,
     device: str = "cpu",
+    tta: bool = False,
 ) -> list[dict]:
     """Predict each image; abstain when confidence is below threshold."""
     transform = serving_transforms(img_size)
@@ -59,7 +66,8 @@ def predict_batch(
     with torch.no_grad():
         for path in image_paths:
             img = Image.open(path).convert("RGB")
-            logits = model(transform(img).unsqueeze(0).to(device))
+            tensor = transform(img).unsqueeze(0).to(device)
+            logits = tta_logits(model, tensor) if tta else model(tensor)
             probs = torch.softmax(logits / temperature, dim=1)[0].tolist()
             confidence = max(probs)
             predicted = classes[probs.index(confidence)]
@@ -96,6 +104,7 @@ def main() -> None:
     parser.add_argument("--img-size", type=int, default=224)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--threshold", type=float, default=0.0)
+    parser.add_argument("--tta", action="store_true")
     parser.add_argument("--output-csv", default="predictions.csv")
     args = parser.parse_args()
 
@@ -119,6 +128,7 @@ def main() -> None:
         temperature=temperature,
         threshold=args.threshold,
         device=device,
+        tta=args.tta,
     )
     write_csv(rows, args.output_csv)
     abstained = sum(1 for r in rows if r["abstained"])

@@ -34,6 +34,7 @@ def test_train_classifier_smoke(tmp_path):
         batch_size=2,
         epochs_stage1=1,
         epochs_stage2=1,
+        pretrained=False,
         output_dir=str(out),
     )
     assert set(metrics["val"]) >= {
@@ -67,6 +68,7 @@ def test_compare_writes_csv_and_markdown(tmp_path):
         batch_size=2,
         epochs_stage1=1,
         epochs_stage2=1,
+        pretrained=False,
     )
     assert len(rows) == 1 and rows[0]["arch"] == "mobilenet_v3_small"
     with open(tmp_path / "compare" / "results.csv") as f:
@@ -88,6 +90,7 @@ def test_compare_appends_soft_vote_ensemble(tmp_path):
         batch_size=2,
         epochs_stage1=1,
         epochs_stage2=1,
+        pretrained=False,
     )
     assert [r["arch"] for r in rows] == [
         "resnet18",
@@ -95,6 +98,51 @@ def test_compare_appends_soft_vote_ensemble(tmp_path):
         "ensemble(n=2)",
     ]
     assert rows[-1]["val_macro_f1"] >= 0.0
+
+
+def test_amp_and_early_stopping_paths(tmp_path):
+    import json
+
+    data = tmp_path / "dataset"
+    _make_dataset(data)
+    out = tmp_path / "outputs-amp"
+    metrics = train_classifier(
+        str(data),
+        arch="resnet18",
+        img_size=32,
+        batch_size=2,
+        epochs_stage1=2,
+        epochs_stage2=2,
+        pretrained=False,
+        use_amp=True,
+        patience=1,
+        output_dir=str(out),
+    )
+    run = json.loads((out / "run.json").read_text())
+    assert run["params"]["epochs_run"] <= 4
+    assert run["params"]["use_amp"] is True
+    assert (out / "best_resnet18.pth").exists()
+    assert metrics["val"]["macro_f1"] >= 0.0
+
+
+def test_focal_loss_trains(tmp_path):
+    data = tmp_path / "dataset"
+    _make_dataset(data)
+    out = tmp_path / "outputs-focal"
+    metrics = train_classifier(
+        str(data),
+        arch="resnet18",
+        img_size=32,
+        batch_size=2,
+        epochs_stage1=1,
+        epochs_stage2=1,
+        pretrained=False,
+        loss_name="focal",
+        patience=None,
+        output_dir=str(out),
+    )
+    assert metrics["val"]["accuracy"] >= 0.0
+    assert (out / "best_resnet18.pth").exists()
 
 
 def test_scheduler_warms_up_then_decays():

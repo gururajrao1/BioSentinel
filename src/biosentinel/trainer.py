@@ -38,6 +38,33 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
 
 
+class FocalLoss(nn.Module):
+    """Cross-entropy down-weighting easy examples; helps rare classes."""
+
+    def __init__(self, weight=None, gamma: float = 2.0):
+        super().__init__()
+        self.register_buffer("weight", weight)
+        self.gamma = gamma
+
+    def forward(self, logits, targets):
+        import torch.nn.functional as F
+
+        ce = F.cross_entropy(
+            logits, targets,
+            weight=self.weight.to(logits.device) if self.weight is not None else None,
+            reduction="none",
+        )
+        return (((1 - torch.exp(-ce)) ** self.gamma) * ce).mean()
+
+
+def build_criterion(loss_name: str, weights, label_smoothing: float) -> nn.Module:
+    if loss_name == "focal":
+        return FocalLoss(weight=weights, gamma=2.0)
+    if loss_name == "ce":
+        return nn.CrossEntropyLoss(weight=weights, label_smoothing=label_smoothing)
+    raise ValueError(f"unknown loss {loss_name!r}; choose 'ce' or 'focal'")
+
+
 def build_scheduler(optimizer, warmup_steps: int, total_steps: int):
     """Linear warmup then cosine decay over the whole run."""
     from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
@@ -52,16 +79,45 @@ def build_scheduler(optimizer, warmup_steps: int, total_steps: int):
     return SequentialLR(optimizer, [warmup, cosine], milestones=[warmup_steps])
 
 
-def _run_epochs(model, loader, criterion, optimizer, device, scheduler=None):
+def _amp_dtype(device: str):
+    """Mixed-precision dtype per device, or None for plain fp32."""
+    if device == "cuda":
+        return torch.float16
+    try:
+        torch.empty(1, dtype=torch.bfloat16).to("cpu")
+        return torch.bfloat16
+    except Exception:
+        return None
+
+
+def _run_epochs(
+    model, loader, criterion, optimizer, device, scheduler=None, use_amp: bool = False
+):
     model.train()
+    amp_dtype = _amp_dtype(device) if use_amp else None
+    scaler = torch.amp.GradScaler("cuda") if use_amp and device == "cuda" else None
     total_loss, correct, total = 0.0, 0, 0
     for images, labels in loader:
         images, labels = images.to(device), labels.to(device)
         optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+        if amp_dtype is None:
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+        elif scaler is not None:
+            with torch.amp.autocast("cuda"):
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            with torch.amp.autocast("cpu", dtype=torch.bfloat16):
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
         if scheduler is not None:
             scheduler.step()
         total_loss += loss.item()
@@ -120,9 +176,13 @@ def train_classifier(
     lr_late: float = 1e-4,
     optimizer_name: str = "adamw",
     weight_decay: float = 0.01,
+    loss_name: str = "ce",
     label_smoothing: float = 0.1,
     warmup_epochs: int = 1,
     calibrate: bool = True,
+    pretrained: bool = True,
+    use_amp: bool = True,
+    patience: int | None = 3,
     seed: int = 42,
     device: str | None = None,
     output_dir: str = "outputs",
@@ -148,10 +208,10 @@ def train_classifier(
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size)
 
-    model = build_classifier(arch, num_classes=len(classes)).to(device)
-    criterion = nn.CrossEntropyLoss(
-        weight=weights, label_smoothing=label_smoothing
-    )
+    model = build_classifier(
+        arch, num_classes=len(classes), pretrained=pretrained
+    ).to(device)
+    criterion = build_criterion(loss_name, weights, label_smoothing)
     opt_cls = {"adamw": torch.optim.AdamW, "adam": torch.optim.Adam}[optimizer_name]
 
     # One optimizer over all params (frozen params get no grad, so the
@@ -167,7 +227,8 @@ def train_classifier(
         warmup_steps=warmup_epochs * max(1, len(train_loader)),
         total_steps=total_steps,
     )
-    best_acc, best_state = -1.0, None
+    best_f1, best_state, epochs_run = -1.0, None, 0
+    stale = 0
     plan = [(set_stage1_head_only, epochs_stage1, lr_head),
             (set_stage2_late_unfreeze, epochs_stage2, lr_late)]
     for freeze_fn, epochs, lr in plan:
@@ -175,11 +236,23 @@ def train_classifier(
         for group in optimizer.param_groups:
             group["lr"] = lr
         for _ in range(epochs):
-            _run_epochs(model, train_loader, criterion, optimizer, device, scheduler)
-        val_acc = _evaluate(model, val_loader, device, classes)["accuracy"]
-        if val_acc > best_acc:
-            best_acc = val_acc
-            best_state = {k: v.cpu() for k, v in model.state_dict().items()}
+            _run_epochs(
+                model, train_loader, criterion, optimizer, device, scheduler,
+                use_amp=use_amp,
+            )
+            epochs_run += 1
+            val_f1 = _evaluate(model, val_loader, device, classes)["macro_f1"]
+            if val_f1 > best_f1:
+                best_f1 = val_f1
+                best_state = {k: v.cpu() for k, v in model.state_dict().items()}
+                stale = 0
+            else:
+                stale += 1
+            if patience is not None and stale >= patience:
+                break
+        if patience is not None and stale >= patience:
+            break
+    metrics_trained_epochs = epochs_run
 
     if best_state is not None:
         model.load_state_dict({k: v.to(device) for k, v in best_state.items()})
@@ -219,8 +292,13 @@ def train_classifier(
             "lr_late": lr_late,
             "optimizer": optimizer_name,
             "weight_decay": weight_decay,
+            "loss": loss_name,
             "label_smoothing": label_smoothing,
             "warmup_epochs": warmup_epochs,
+            "pretrained": pretrained,
+            "use_amp": use_amp,
+            "patience": patience,
+            "epochs_run": metrics_trained_epochs,
             "seed": seed,
         },
         metrics={

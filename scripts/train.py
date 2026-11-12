@@ -25,9 +25,13 @@ def main() -> None:
     parser.add_argument("--lr-head", type=float, default=1e-3)
     parser.add_argument("--lr-late", type=float, default=1e-4)
     parser.add_argument("--optimizer", default="adamw", choices=["adamw", "adam"])
+    parser.add_argument("--loss", default="ce", choices=["ce", "focal"])
     parser.add_argument("--label-smoothing", type=float, default=0.1)
     parser.add_argument("--warmup-epochs", type=int, default=1)
     parser.add_argument("--no-calibrate", action="store_true")
+    parser.add_argument("--no-pretrained", action="store_true")
+    parser.add_argument("--no-amp", action="store_true")
+    parser.add_argument("--patience", type=int, default=3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", default="outputs")
     args = parser.parse_args()
@@ -42,9 +46,13 @@ def main() -> None:
         lr_head=args.lr_head,
         lr_late=args.lr_late,
         optimizer_name=args.optimizer,
+        loss_name=args.loss,
         label_smoothing=args.label_smoothing,
         warmup_epochs=args.warmup_epochs,
         calibrate=not args.no_calibrate,
+        pretrained=not args.no_pretrained,
+        use_amp=not args.no_amp,
+        patience=args.patience,
         seed=args.seed,
         output_dir=args.output_dir,
     )

@@ -64,7 +64,7 @@ def ensemble_row(
     all_probs, labels = [], None
     with torch.no_grad():
         for arch in arches:
-            model = build_classifier(arch, num_classes=len(classes))
+            model = build_classifier(arch, num_classes=len(classes), pretrained=False)
             model.load_state_dict(
                 torch.load(
                     os.path.join(output_dir, arch, f"best_{arch}.pth"),
@@ -160,6 +160,9 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--epochs-stage1", type=int, default=2)
     parser.add_argument("--epochs-stage2", type=int, default=2)
+    parser.add_argument("--no-pretrained", action="store_true")
+    parser.add_argument("--no-amp", action="store_true")
+    parser.add_argument("--patience", type=int, default=3)
     parser.add_argument("--output-dir", default="outputs/compare")
     args = parser.parse_args()
     for arch in args.arches:
@@ -174,6 +177,9 @@ def main() -> None:
         batch_size=args.batch_size,
         epochs_stage1=args.epochs_stage1,
         epochs_stage2=args.epochs_stage2,
+        pretrained=not args.no_pretrained,
+        use_amp=not args.no_amp,
+        patience=args.patience,
     )
     print(format_markdown_table(rows))
 

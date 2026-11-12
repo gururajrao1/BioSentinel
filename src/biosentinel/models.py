@@ -11,7 +11,18 @@ from __future__ import annotations
 import torch.nn as nn
 from torchvision import models
 
-EDGE_ARCHES = ("efficientnet_b0", "efficientnet_b4", "mobilenet_v3_small", "resnet18")
+EDGE_ARCHES = (
+    "convnext_tiny",
+    "densenet121",
+    "efficientnet_b0",
+    "efficientnet_b1",
+    "efficientnet_b4",
+    "mobilenet_v3_small",
+    "mobilenet_v3_large",
+    "resnet18",
+    "resnet34",
+    "swin_t",
+)
 
 
 def head_prefixes(model) -> tuple[str, ...]:
@@ -23,6 +34,12 @@ def head_prefixes(model) -> tuple[str, ...]:
         return ("classifier.1.",)
     if "MobileNet" in kind:
         return ("classifier.3.",)
+    if "DenseNet" in kind:
+        return ("classifier.",)
+    if "ConvNeXt" in kind:
+        return ("classifier.2.",)
+    if "SwinTransformer" in kind:
+        return ("head.",)
     raise ValueError(f"no known head for model type {kind!r}")
 
 
@@ -40,27 +57,74 @@ def late_prefixes(model) -> tuple[str, ...]:
     kind = type(model).__name__
     if "ResNet" in kind:
         return ("layer4.", "fc.")
+    if "DenseNet" in kind:
+        return ("features.denseblock4.", "classifier.")
     last = _last_block_prefix(model)
     heads = head_prefixes(model)
     return ((last,) if last else ()) + heads
 
 
-def build_classifier(arch: str, num_classes: int = 4) -> nn.Module:
-    """Build a classifier with random init (no weight download in tests)."""
-    if arch == "resnet18":
-        model = models.resnet18(weights=None)
+def build_classifier(
+    arch: str, num_classes: int = 4, pretrained: bool = False
+) -> nn.Module:
+    """Build a classifier; pass pretrained=True for the §2.1 baseline.
+
+    Default is random init so tests and offline use never download weights.
+    """
+    if arch in ("resnet18", "resnet34"):
+        weights_enum = (
+            models.ResNet18_Weights if arch == "resnet18" else models.ResNet34_Weights
+        )
+        builder = models.resnet18 if arch == "resnet18" else models.resnet34
+        model = builder(weights=weights_enum.DEFAULT if pretrained else None)
         model.fc = nn.Linear(model.fc.in_features, num_classes)
         return model
-    if arch in ("efficientnet_b0", "efficientnet_b4"):
-        builder = (
-            models.efficientnet_b0 if arch == "efficientnet_b0" else models.efficientnet_b4
-        )
-        model = builder(weights=None)
+    if arch in ("efficientnet_b0", "efficientnet_b1", "efficientnet_b4"):
+        weights_enum = {
+            "efficientnet_b0": models.EfficientNet_B0_Weights,
+            "efficientnet_b1": models.EfficientNet_B1_Weights,
+            "efficientnet_b4": models.EfficientNet_B4_Weights,
+        }[arch]
+        builder = {
+            "efficientnet_b0": models.efficientnet_b0,
+            "efficientnet_b1": models.efficientnet_b1,
+            "efficientnet_b4": models.efficientnet_b4,
+        }[arch]
+        model = builder(weights=weights_enum.DEFAULT if pretrained else None)
         in_features = model.classifier[1].in_features
         model.classifier[1] = nn.Linear(in_features, num_classes)
         return model
-    if arch == "mobilenet_v3_small":
-        model = models.mobilenet_v3_small(weights=None)
+    if arch == "densenet121":
+        model = models.densenet121(
+            weights=models.DenseNet121_Weights.DEFAULT if pretrained else None
+        )
+        model.classifier = nn.Linear(model.classifier.in_features, num_classes)
+        return model
+    if arch == "convnext_tiny":
+        model = models.convnext_tiny(
+            weights=models.ConvNeXt_Tiny_Weights.DEFAULT if pretrained else None
+        )
+        in_features = model.classifier[2].in_features
+        model.classifier[2] = nn.Linear(in_features, num_classes)
+        return model
+    if arch == "swin_t":
+        model = models.swin_t(
+            weights=models.Swin_T_Weights.DEFAULT if pretrained else None
+        )
+        model.head = nn.Linear(model.head.in_features, num_classes)
+        return model
+    if arch in ("mobilenet_v3_small", "mobilenet_v3_large"):
+        weights_enum = (
+            models.MobileNet_V3_Small_Weights
+            if arch == "mobilenet_v3_small"
+            else models.MobileNet_V3_Large_Weights
+        )
+        builder = (
+            models.mobilenet_v3_small
+            if arch == "mobilenet_v3_small"
+            else models.mobilenet_v3_large
+        )
+        model = builder(weights=weights_enum.DEFAULT if pretrained else None)
         in_features = model.classifier[3].in_features
         model.classifier[3] = nn.Linear(in_features, num_classes)
         return model
