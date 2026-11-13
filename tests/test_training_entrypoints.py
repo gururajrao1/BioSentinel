@@ -100,6 +100,26 @@ def test_compare_appends_soft_vote_ensemble(tmp_path):
     assert rows[-1]["val_macro_f1"] >= 0.0
 
 
+def test_balanced_sampler_trains(tmp_path):
+    data = tmp_path / "dataset"
+    _make_dataset(data)
+    out = tmp_path / "outputs-bal"
+    metrics = train_classifier(
+        str(data),
+        arch="resnet18",
+        img_size=32,
+        batch_size=2,
+        epochs_stage1=1,
+        epochs_stage2=1,
+        pretrained=False,
+        balanced_sampler=True,
+        patience=None,
+        output_dir=str(out),
+    )
+    assert metrics["val"]["accuracy"] >= 0.0
+    assert json.loads((out / "run.json").read_text())["params"]["balanced_sampler"] is True
+
+
 def test_amp_and_early_stopping_paths(tmp_path):
     import json
 

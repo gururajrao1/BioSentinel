@@ -50,19 +50,38 @@ def tta_logits(model, tensor):
     return (model(tensor) + model(flipped)) / 2
 
 
+def parse_thresholds(spec: str | None, default: float) -> dict[str, float]:
+    """Parse 'burn:0.92,necrosis:0.8' into per-class thresholds."""
+    thresholds: dict[str, float] = {}
+    if spec:
+        for item in spec.split(","):
+            name, _, value = item.partition(":")
+            thresholds[name.strip()] = float(value)
+    return thresholds
+
+
 def predict_batch(
     model,
     image_paths: list[str],
     classes: list[str],
     img_size: int = 224,
     temperature: float = 1.0,
-    threshold: float = 0.0,
+    threshold: float | dict[str, float] = 0.0,
     device: str = "cpu",
     tta: bool = False,
 ) -> list[dict]:
-    """Predict each image; abstain when confidence is below threshold."""
+    """Predict each image; abstain when confidence is below threshold.
+
+    threshold may be a single float or a per-class dict (missing classes
+    fall back to 0.0); use a higher bar for the trigger-happy class.
+    """
     transform = serving_transforms(img_size)
     temperature = max(float(temperature), 1e-3)
+    bars = (
+        threshold
+        if isinstance(threshold, dict)
+        else {c: float(threshold) for c in classes}
+    )
     rows = []
     with torch.no_grad():
         for path in image_paths:
@@ -72,7 +91,7 @@ def predict_batch(
             probs = torch.softmax(logits / temperature, dim=1)[0].tolist()
             confidence = max(probs)
             predicted = classes[probs.index(confidence)]
-            abstained = confidence < threshold
+            abstained = confidence < bars.get(predicted, 0.0)
             rows.append(
                 {
                     "filename": os.path.basename(path),
@@ -105,6 +124,11 @@ def main() -> None:
     parser.add_argument("--img-size", type=int, default=224)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--threshold", type=float, default=0.0)
+    parser.add_argument(
+        "--per-class-thresholds",
+        default=None,
+        help="e.g. 'burn:0.92,necrosis:0.8' (overrides --threshold per class)",
+    )
     parser.add_argument("--tta", action="store_true")
     parser.add_argument("--output-csv", default="predictions.csv")
     args = parser.parse_args()
@@ -120,6 +144,7 @@ def main() -> None:
         parser.error("provide --classes or --metrics-json")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    thresholds = parse_thresholds(args.per_class_thresholds, args.threshold)
     model = load_model(args.arch, args.checkpoint, len(classes), device)
     rows = predict_batch(
         model,
@@ -127,7 +152,7 @@ def main() -> None:
         classes,
         img_size=args.img_size,
         temperature=temperature,
-        threshold=args.threshold,
+        threshold=thresholds or args.threshold,
         device=device,
         tta=args.tta,
     )

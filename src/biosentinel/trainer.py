@@ -57,6 +57,22 @@ class FocalLoss(nn.Module):
         return (((1 - torch.exp(-ce)) ** self.gamma) * ce).mean()
 
 
+def build_balanced_loader(
+    dataset, batch_size: int, seed: int
+) -> DataLoader:
+    """Train loader sampling each class with equal probability."""
+    from torch.utils.data import WeightedRandomSampler
+
+    targets = [c for _, c in dataset.samples]
+    counts = np.bincount(targets)
+    sample_weights = [1.0 / counts[c] for c in targets]
+    generator = torch.Generator().manual_seed(seed)
+    sampler = WeightedRandomSampler(
+        sample_weights, len(sample_weights), replacement=True, generator=generator
+    )
+    return DataLoader(dataset, batch_size=batch_size, sampler=sampler)
+
+
 def build_criterion(loss_name: str, weights, label_smoothing: float) -> nn.Module:
     if loss_name == "focal":
         return FocalLoss(weight=weights, gamma=2.0)
@@ -183,6 +199,7 @@ def train_classifier(
     pretrained: bool = True,
     use_amp: bool = True,
     patience: int | None = 3,
+    balanced_sampler: bool = False,
     seed: int = 42,
     device: str | None = None,
     output_dir: str = "outputs",
@@ -205,7 +222,10 @@ def train_classifier(
     classes = train_ds.classes
     counts = [sum(1 for _, c in train_ds.samples if c == i) for i in range(len(classes))]
     weights = compute_class_weights(counts).to(device)
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    if balanced_sampler:
+        train_loader = build_balanced_loader(train_ds, batch_size, seed)
+    else:
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size)
 
     model = build_classifier(
@@ -298,6 +318,7 @@ def train_classifier(
             "pretrained": pretrained,
             "use_amp": use_amp,
             "patience": patience,
+            "balanced_sampler": balanced_sampler,
             "epochs_run": metrics_trained_epochs,
             "seed": seed,
         },

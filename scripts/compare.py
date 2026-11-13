@@ -164,6 +164,7 @@ def main() -> None:
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--patience", type=int, default=3)
     parser.add_argument("--loss", default="ce", choices=["ce", "focal"])
+    parser.add_argument("--balanced-sampler", action="store_true")
     parser.add_argument("--output-dir", default="outputs/compare")
     args = parser.parse_args()
     for arch in args.arches:
@@ -182,6 +183,7 @@ def main() -> None:
         use_amp=not args.no_amp,
         patience=args.patience,
         loss_name=args.loss,
+        balanced_sampler=args.balanced_sampler,
     )
     print(format_markdown_table(rows))
 

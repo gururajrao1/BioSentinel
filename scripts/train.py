@@ -32,6 +32,7 @@ def main() -> None:
     parser.add_argument("--no-pretrained", action="store_true")
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--patience", type=int, default=3)
+    parser.add_argument("--balanced-sampler", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", default="outputs")
     args = parser.parse_args()
@@ -53,6 +54,7 @@ def main() -> None:
         pretrained=not args.no_pretrained,
         use_amp=not args.no_amp,
         patience=args.patience,
+        balanced_sampler=args.balanced_sampler,
         seed=args.seed,
         output_dir=args.output_dir,
     )

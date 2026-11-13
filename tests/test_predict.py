@@ -11,7 +11,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from biosentinel.models import build_classifier
-from predict import ABSTAIN, list_images, predict_batch, write_csv
+from predict import (
+    ABSTAIN,
+    list_images,
+    load_model,
+    parse_thresholds,
+    predict_batch,
+    write_csv,
+)
 
 
 def _images(tmp_path: Path, n: int = 2) -> list[str]:
@@ -64,6 +71,24 @@ def test_tta_is_deterministic_and_valid(tmp_path):
     rows_b = predict_batch(model, paths, ["burn", "necrosis"], img_size=32, tta=True)
     assert rows_a == rows_b
     assert all(r["predicted"] in ("burn", "necrosis") for r in rows_a)
+
+
+def test_per_class_thresholds_abstain_selectively(tmp_path):
+    paths = _images(tmp_path)
+    model = load_model("resnet18", _checkpoint(tmp_path), 2, "cpu")
+    assert parse_thresholds("burn:0.99,necrosis:0.8", 0.0) == {
+        "burn": 0.99,
+        "necrosis": 0.8,
+    }
+    rows = predict_batch(
+        model, paths, ["burn", "necrosis"], img_size=32, threshold={"burn": 1.01}
+    )
+    # Burn bar is unreachable: every burn prediction must abstain instead.
+    assert all(r["predicted"] != "burn" for r in rows)
+    # Necrosis bar defaults to 0.0: necrosis predictions are never abstained.
+    assert all(
+        r["predicted"] != "necrosis" or not r["abstained"] for r in rows
+    )
 
 
 def test_list_images_recurses_into_class_dirs(tmp_path):
