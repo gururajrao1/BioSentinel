@@ -66,6 +66,13 @@ def test_tta_is_deterministic_and_valid(tmp_path):
     assert all(r["predicted"] in ("burn", "necrosis") for r in rows_a)
 
 
+def test_list_images_recurses_into_class_dirs(tmp_path):
+    nested = tmp_path / "data" / "burn"
+    nested.mkdir(parents=True)
+    Image.new("RGB", (16, 16)).save(nested / "x.jpg")
+    assert list_images(str(tmp_path / "data")) == [str(nested / "x.jpg")]
+
+
 def test_list_images_accepts_file_or_dir(tmp_path):
     paths = _images(tmp_path, n=2)
     assert list_images(paths[0]) == [paths[0]]

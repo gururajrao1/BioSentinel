@@ -30,11 +30,12 @@ IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
 def list_images(path: str) -> list[str]:
     if os.path.isfile(path):
         return [path]
-    return sorted(
-        os.path.join(path, f)
-        for f in os.listdir(path)
-        if f.lower().endswith(IMAGE_EXTS)
-    )
+    found = []
+    for root, _, files in os.walk(path):
+        for f in sorted(files):
+            if f.lower().endswith(IMAGE_EXTS):
+                found.append(os.path.join(root, f))
+    return sorted(found)
 
 
 def load_model(arch: str, checkpoint: str, num_classes: int, device: str):
